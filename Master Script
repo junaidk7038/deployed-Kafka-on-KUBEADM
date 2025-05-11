@@ -1,0 +1,647 @@
+https://github.com/anishrana2001/Kubernetes/tree/main/Kubernetes%20init
+
+sudo -i
+
+### Disable SELINUX ####
+
+cat /etc/sysconfig/selinux | grep SELINUX=
+sed -i --follow-symlinks 's/SELINUX=enforcing/SELINUX=disabled/g' /etc/sysconfig/selinux
+cat /etc/sysconfig/selinux | grep SELINUX=
+setenforce 0
+######################
+
+
+### Make DNS local entries ### Change it as per your requirement #####
+cat <<EOF>>  /etc/hosts
+
+172.31.7.189	master1
+172.31.6.38	workernode1
+172.31.12.217	workernode2
+EOF
+######################
+
+### Check the connectivity of your cluster nodes #########
+ping -c 2 workernode1
+ping -c 2 workernode2
+######################
+
+
+### Disable the Firewall ########
+systemctl stop firewalld.service
+systemctl disable firewalld
+systemctl status firewalld
+######################
+
+### Kubernetes prerequisite #######
+RAM=`cat /proc/meminfo | grep MemTotal | awk '{print ($2 / 1024) / 1024 ,"GiB"}'`
+CPU=`cat /proc/cpuinfo | grep processor`
+
+sed -i '/ swap / s/^\(.*\)$/#\1/g' /etc/fstab
+swapoff -a
+echo "Your system RAM is $RAM"
+echo "Your system CPU are $CPU"
+######################
+
+
+### Preparation for Docker installation #########
+modprobe br_netfilter
+lsmod | grep br_netfilter
+
+echo '1' > /proc/sys/net/bridge/bridge-nf-call-iptables
+sysctl -a | grep net.bridge.bridge-nf-call-iptables
+######################
+
+
+
+### Docker installation steps #######
+
+sudo dnf remove docker docker-client docker-client-latest docker-common docker-latest docker-latest-logrotate docker-logrotate docker-engine
+sudo dnf -y install dnf-plugins-core
+sudo dnf config-manager --add-repo https://download.docker.com/linux/centos/docker-ce.repo
+sudo dnf install docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin -y
+sudo mkdir -p /etc/containerd
+containerd config default | sed 's/SystemdCgroup = false/SystemdCgroup = true/' | sudo tee /etc/containerd/config.toml
+cat /etc/containerd/config.toml | grep -i SystemdCgroup -B 50
+systemctl start docker
+systemctl enable docker
+docker run hello-world
+
+######################
+
+
+
+
+### Kubernetes installation steps #####
+
+cat <<EOF | sudo tee /etc/yum.repos.d/kubernetes.repo
+[kubernetes]
+name=Kubernetes
+baseurl=https://pkgs.k8s.io/core:/stable:/v1.32/rpm/
+enabled=1
+gpgcheck=1
+gpgkey=https://pkgs.k8s.io/core:/stable:/v1.32/rpm/repodata/repomd.xml.key
+exclude=kubelet kubeadm kubectl cri-tools kubernetes-cni
+EOF
+
+
+dnf install -y kubelet kubeadm kubectl --disableexcludes=kubernetes
+systemctl enable kubelet
+systemctl start kubelet
+
+
+=====================================================================================================================================================================
+#####################_AFTER EXECUTE WORKER SCRIPT START BELOW STEPS_#####################
+
+swapoff -a
+
+####_AFTER EXECUTING BELOW YOU'LL GET TOKEN THAT COMMAND OUGHT EXECUTE ON ALL WORKER NODES_####
+kubeadm init --apiserver-advertise-address 172.31.21.99 --pod-network-cidr "10.244.0.0/16" --upload-certs
+
+mkdir -p $HOME/.kube
+cp -i /etc/kubernetes/admin.conf $HOME/.kube/config
+chown $(id -u):$(id -g) $HOME/.kube/config
+
+### You should now deploy a Pod network to the cluster. ####
+
+#kubectl apply -f https://docs.projectcalico.org/manifests/calico.yaml
+kubectl apply -f https://github.com/flannel-io/flannel/releases/latest/download/kube-flannel.yml
+
+vi .bashrc
+
+alias k="kubectl"
+alias kk="kubectl get pods"
+
+source ~/.bashrc
+
+k get nodes
+
+
+sudo kubeadm token create --print-join-command
+
+
+
+
+kubectl label node ip-172-31-41-116.ap-south-1.compute.internal node-role.kubernetes.io/worker1=
+
+kubectl label node ip-172-31-33-122.ap-south-1.compute.internal node-role.kubernetes.io/worker2=
+
+kubectl label node ip-172-31-42-228.ap-south-1.compute.internal node-role.kubernetes.io/worker3=
+
+
+#########################################################################################################################################################################################
+
+
+
+export PATH=$PATH:/usr/local/bin
+
+curl -fsSL -o get_helm.sh https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3
+
+chmod 700 get_helm.sh
+
+./get_helm.sh
+
+kubectl create namespace confluent
+
+kubectl config set-context --current --namespace confluent
+
+helm repo add confluentinc https://packages.confluent.io/helm
+
+helm repo update
+
+helm upgrade --install \
+  confluent-operator confluentinc/confluent-for-kubernetes
+
+kubectl get pods
+
+
+
+# ON WORKER NODE ONLY
+
+mkdir -p /mnt/data/datadir
+mkdir -p /mnt/data/dataLogDir
+mkdir -p /mnt/data/controlcenter
+mkdir -p /mnt/data/kafka
+
+chmod 777 -R /mnt/data/datadir
+chmod 777 -R /mnt/data/dataLogDir
+chmod 777 -R /mnt/data/kafka
+chmod 777 -R /mnt/data/controlcenter
+
+
+# ON MASTER NODE ONLY
+
+
+
+vi sc.yaml
+
+apiVersion: storage.k8s.io/v1
+kind: StorageClass
+metadata:
+  name: kafka
+provisioner: kubernetes.io/no-provisioner
+volumeBindingMode: WaitForFirstConsumer
+
+
+
+vi confluent-platform.yaml
+
+---
+apiVersion: platform.confluent.io/v1beta1
+kind: Zookeeper
+metadata:
+  name: zookeeper
+  namespace: confluent
+spec:
+  replicas: 3
+  image:
+    application: confluentinc/cp-server:7.9.0
+    init: confluentinc/confluent-init-container:2.11.0
+  dataVolumeCapacity: 1Gi
+  logVolumeCapacity: 1Gi
+  storageClass:
+    name: kafka
+
+
+
+
+
+kubectl get nodes \
+  -o 'custom-columns=NAME:metadata.name,HOSTNAME:metadata.labels.kubernetes\.io/hostname'
+
+vi pv-1.yaml
+
+
+apiVersion: v1
+kind: PersistentVolume
+metadata:
+  name: pv-1
+spec:
+  capacity:
+    storage: 2Gi
+  volumeMode: Filesystem
+  accessModes:
+  - ReadWriteOnce
+  persistentVolumeReclaimPolicy: Retain
+  storageClassName: kafka
+  local:
+     path: /mnt/data/datadir
+  nodeAffinity:
+    required:
+      nodeSelectorTerms:
+      - matchExpressions:
+        - key: kubernetes.io/hostname
+          operator: In
+          values:
+          - ip-172-31-12-141.ap-south-1.compute.internal
+
+
+vi pv-2.yaml
+
+
+apiVersion: v1
+kind: PersistentVolume
+metadata:
+  name: pv-2
+spec:
+  capacity:
+    storage: 2Gi
+  volumeMode: Filesystem
+  accessModes:
+  - ReadWriteOnce
+  persistentVolumeReclaimPolicy: Retain
+  storageClassName: kafka
+  local:
+     path: /mnt/data/dataLogDir
+  nodeAffinity:
+    required:
+      nodeSelectorTerms:
+      - matchExpressions:
+        - key: kubernetes.io/hostname
+          operator: In
+          values:
+          - ip-172-31-12-141.ap-south-1.compute.internal
+
+vi pv-3.yaml
+
+
+apiVersion: v1
+kind: PersistentVolume
+metadata:
+  name: pv-3
+spec:
+  capacity:
+    storage: 2Gi
+  volumeMode: Filesystem
+  accessModes:
+  - ReadWriteOnce
+  persistentVolumeReclaimPolicy: Retain
+  storageClassName: kafka
+  local:
+     path: /mnt/data/datadir
+  nodeAffinity:
+    required:
+      nodeSelectorTerms:
+      - matchExpressions:
+        - key: kubernetes.io/hostname
+          operator: In
+          values:
+          - ip-172-31-10-114.ap-south-1.compute.internal
+
+
+vi pv-4.yaml
+
+
+apiVersion: v1
+kind: PersistentVolume
+metadata:
+  name: pv-4
+spec:
+  capacity:
+    storage: 2Gi
+  volumeMode: Filesystem
+  accessModes:
+  - ReadWriteOnce
+  persistentVolumeReclaimPolicy: Retain
+  storageClassName: kafka
+  local:
+     path: /mnt/data/dataLogDir
+  nodeAffinity:
+    required:
+      nodeSelectorTerms:
+      - matchExpressions:
+        - key: kubernetes.io/hostname
+          operator: In
+          values:
+          - ip-172-31-10-114.ap-south-1.compute.internal
+
+
+vi pv-5.yaml
+
+
+apiVersion: v1
+kind: PersistentVolume
+metadata:
+  name: pv-5
+spec:
+  capacity:
+    storage: 2Gi
+  volumeMode: Filesystem
+  accessModes:
+  - ReadWriteOnce
+  persistentVolumeReclaimPolicy: Retain
+  storageClassName: kafka
+  local:
+     path: /mnt/data/datadir
+  nodeAffinity:
+    required:
+      nodeSelectorTerms:
+      - matchExpressions:
+        - key: kubernetes.io/hostname
+          operator: In
+          values:
+          - ip-172-31-11-168.ap-south-1.compute.internal
+
+
+vi pv-6.yaml
+
+
+apiVersion: v1
+kind: PersistentVolume
+metadata:
+  name: pv-6
+spec:
+  capacity:
+    storage: 2Gi
+  volumeMode: Filesystem
+  accessModes:
+  - ReadWriteOnce
+  persistentVolumeReclaimPolicy: Retain
+  storageClassName: kafka
+  local:
+     path: /mnt/data/dataLogDir
+  nodeAffinity:
+    required:
+      nodeSelectorTerms:
+      - matchExpressions:
+        - key: kubernetes.io/hostname
+          operator: In
+          values:
+          - ip-172-31-11-168.ap-south-1.compute.internal
+
+
+
+k apply -f sc.yaml -f pv-1.yaml -f pv-2.yaml -f pv-3.yaml -f pv-4.yaml -f pv-5.yaml -f pv-6.yaml
+
+k delete -f sc.yaml -f pv-1.yaml -f pv-2.yaml -f pv-3.yaml -f pv-4.yaml -f pv-5.yaml -f pv-6.yaml
+
+
+
+
+vi confluent-platform.yaml
+
+---
+apiVersion: platform.confluent.io/v1beta1
+kind: Kafka
+metadata:
+  name: kafka
+  namespace: confluent
+spec:
+  replicas: 3
+  image:
+    application: confluentinc/cp-server:7.9.0
+    init: confluentinc/confluent-init-container:2.11.0
+  dataVolumeCapacity: 1Gi
+  metricReporter:
+    enabled: true
+  dependencies:
+    zookeeper:
+      endpoint: zookeeper.confluent.svc.cluster.local:2181
+  storageClass:
+    name: kafka
+
+vi pv-7.yaml
+
+apiVersion: v1
+kind: PersistentVolume
+metadata:
+  name: pv-7
+spec:
+  capacity:
+    storage: 2Gi
+  volumeMode: Filesystem
+  accessModes:
+  - ReadWriteOnce
+  persistentVolumeReclaimPolicy: Retain
+  storageClassName: kafka
+  local:
+     path: /mnt/data/kafka
+  nodeAffinity:
+    required:
+      nodeSelectorTerms:
+      - matchExpressions:
+        - key: kubernetes.io/hostname
+          operator: In
+          values:
+          - ip-172-31-11-255.ap-south-1.compute.internal
+
+vi pv-8.yaml
+
+apiVersion: v1
+kind: PersistentVolume
+metadata:
+  name: pv-8
+spec:
+  capacity:
+    storage: 2Gi
+  volumeMode: Filesystem
+  accessModes:
+  - ReadWriteOnce
+  persistentVolumeReclaimPolicy: Retain
+  storageClassName: kafka
+  local:
+     path: /mnt/data/kafka
+  nodeAffinity:
+    required:
+      nodeSelectorTerms:
+      - matchExpressions:
+        - key: kubernetes.io/hostname
+          operator: In
+          values:
+          - ip-172-31-2-111.ap-south-1.compute.internal
+
+
+vi pv-9.yaml
+
+apiVersion: v1
+kind: PersistentVolume
+metadata:
+  name: pv-9
+spec:
+  capacity:
+    storage: 2Gi
+  volumeMode: Filesystem
+  accessModes:
+  - ReadWriteOnce
+  persistentVolumeReclaimPolicy: Retain
+  storageClassName: kafka
+  local:
+     path: /mnt/data/kafka
+  nodeAffinity:
+    required:
+      nodeSelectorTerms:
+      - matchExpressions:
+        - key: kubernetes.io/hostname
+          operator: In
+          values:
+          - ip-172-31-13-74.ap-south-1.compute.internal
+
+
+vi confluent-platform.yaml
+
+
+---
+apiVersion: platform.confluent.io/v1beta1
+kind: ControlCenter
+metadata:
+  name: controlcenter
+  namespace: confluent
+spec:
+  replicas: 1
+  image:
+    application: confluentinc/cp-server:7.9.0
+    init: confluentinc/confluent-init-container:2.11.0
+  dataVolumeCapacity: 1Gi
+  dependencies:
+    schemaRegistry:
+      url: http://schemaregistry.confluent.svc.cluster.local:8081
+    ksqldb:
+    - name: ksqldb
+      url: http://ksqldb.confluent.svc.cluster.local:8088
+    connect:
+    - name: connect
+      url: http://connect.confluent.svc.cluster.local:8083
+  storageClass:
+    name: kafka
+
+
+
+vi pv-10.yaml
+
+
+apiVersion: v1
+kind: PersistentVolume
+metadata:
+  name: pv-10
+spec:
+  capacity:
+    storage: 2Gi
+  volumeMode: Filesystem
+  accessModes:
+  - ReadWriteOnce
+  persistentVolumeReclaimPolicy: Retain
+  storageClassName: kafka
+  local:
+    path: /mnt/data/controlcenter
+  nodeAffinity:
+    required:
+      nodeSelectorTerms:
+      - matchExpressions:
+        - key: kubernetes.io/hostname
+          operator: In
+          values:
+          - ip-172-31-12-141.ap-south-1.compute.internal
+          - ip-172-31-10-114.ap-south-1.compute.internal
+          - ip-172-31-11-168.ap-south-1.compute.internal
+
+
+
+
+vi service-controlcenter.yaml
+
+apiVersion: v1
+kind: Service
+metadata:
+  name: confluent-controlcenter
+spec:
+  type: LoadBalancer
+  selector:
+    app: controlcenter
+  ports:
+    - protocol: TCP
+      port: 9021
+      targetPort: 9021
+
+
+k get svc
+
+confluent-controlcenter    LoadBalancer   10.101.186.124   <pending>     9021:31256/TCP                                                   5s
+confluent-operator         ClusterIP      10.104.97.229    <none>        7778/TCP                                                         71m
+controlcenter              ClusterIP      None             <none>        9021/TCP,7203/TCP,7777/TCP,7778/TCP                              62m
+controlcenter-0-internal   ClusterIP      10.98.207.124    <none>        9021/TCP,7203/TCP,7777/TCP,7778/TCP                              62m
+kafka                      ClusterIP      None             <none>        9092/TCP,8090/TCP,9071/TCP,7203/TCP,7777/TCP,7778/TCP,9072/TCP   65m
+kafka-0-internal           ClusterIP      10.108.66.83     <none>        9092/TCP,8090/TCP,9071/TCP,7203/TCP,7777/TCP,7778/TCP,9072/TCP   65m
+kafka-1-internal           ClusterIP      10.101.129.42    <none>        9092/TCP,8090/TCP,9071/TCP,7203/TCP,7777/TCP,7778/TCP,9072/TCP   65m
+kafka-2-internal           ClusterIP      10.101.254.252   <none>        9092/TCP,8090/TCP,9071/TCP,7203/TCP,7777/TCP,7778/TCP,9072/TCP   65m
+zookeeper                  ClusterIP      None             <none>        2181/TCP,7203/TCP,7777/TCP,3888/TCP,2888/TCP,7778/TCP            69m
+zookeeper-0-internal       ClusterIP      10.98.239.76     <none>        2181/TCP,7203/TCP,7777/TCP,3888/TCP,2888/TCP,7778/TCP            69m
+zookeeper-1-internal       ClusterIP      10.108.113.188   <none>        2181/TCP,7203/TCP,7777/TCP,3888/TCP,2888/TCP,7778/TCP            69m
+zookeeper-2-internal       ClusterIP      10.103.143.78    <none>        2181/TCP,7203/TCP,7777/TCP,3888/TCP,2888/TCP,7778/TCP            69m
+
+
+
+
+
+
+http://15.207.247.196:31256/
+
+
+hostname -i
+192.168.234.130
+
+
+kafka-topics --bootstrap-server 192.168.234.130:9092  --list | wc
+
+kafka-topics --bootstrap-server 192.168.170.194:9092 --describe --topic junaid
+
+
+
+bash-4.4$ kafka-topics --bootstrap-server 192.168.170.194:9092 --describe --under-replicated-partitions --topic junaid
+bash-4.4$ kafka-topics --bootstrap-server 192.168.170.194:9092 --describe --under-replicated-partitions | grep junaid
+bash-4.4$ kafka-topics --bootstrap-server 192.168.170.194:9092 --describe --under-replicated-partitions
+
+
+
+containerd config default
+
+containerd config default | sed 's/SystemdCgroup = false/SystemdCgroup = true/' | sudo tee /etc/containerd/config.toml
+
+cat /etc/containerd/config.toml | grep -i SystemdCgroup -B 50
+
+
+
+
+
+sudo dnf install epel-release -y
+sudo dnf install helm -y
+
+
+
+
+
+
+ACCES KEY : AKIAR7LK6KNNCOWQ2MCJ
+SECRET KEY : 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
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
