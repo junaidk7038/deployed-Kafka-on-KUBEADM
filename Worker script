@@ -1,0 +1,118 @@
+Kindly change the IP address and kubeadm init output of join token in this script.
+
+
+++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+echo -e "\033[44m###Kubernetes installation Preparation ###\033[m"
+RAM=`cat /proc/meminfo | grep MemTotal | awk '{print ($2 / 1024) / 1024 ,"GiB"}'`
+CPU=`cat /proc/cpuinfo | grep processor`
+
+sed -i '/ swap / s/^\(.*\)$/#\1/g' /etc/fstab
+swapoff -a
+echo -e "\033[42mYour system RAM is $RAM\033[m"
+echo -e "\033[42mYour system CPUs are
+$CPU\033[m"
+######################
+
+sleep 10
+
+echo -e "\033[44m###Disable SELINUX ###\033[m"
+
+cat /etc/sysconfig/selinux | grep SELINUX=
+sed -i --follow-symlinks 's/SELINUX=enforcing/SELINUX=disabled/g' /etc/sysconfig/selinux
+sed -i --follow-symlinks 's/SELINUX=permissive/SELINUX=disabled/g' /etc/sysconfig/selinux
+cat /etc/sysconfig/selinux | grep SELINUX=
+setenforce 0
+######################
+
+
+echo -e "\033[44m###Make DNS local entries - Change it as per your requirement ###\033[m"
+cat <<EOF>>  /etc/hosts
+
+172.31.21.99	master1
+172.31.24.22	workernode1
+172.31.21.165	workernode2
+172.31.19.153	workernode3
+172.31.21.214	workernode4
+172.31.22.254	workernode5
+172.31.21.157	workernode6
+EOF
+######################
+
+echo -e "\033[44m###Check the connectivity of your cluster nodes ###\033[m"
+ping -c 2 master1
+ping -c 2 workernode1
+ping -c 2 workernode2
+ping -c 2 workernode3
+ping -c 2 workernode4
+ping -c 2 workernode5
+ping -c 2 workernode6
+ping -c 2 workernode7
+
+######################
+
+sleep 10 
+
+
+echo -e "\033[44m###Disable the Firewall ###\033[m"
+systemctl stop firewalld.service
+systemctl disable firewalld
+systemctl status firewalld
+######################
+
+sleep 10 
+echo -e "\033[44m###Preparation for Docker installation ###\033[m"
+modprobe br_netfilter
+lsmod | grep br_netfilter
+modprobe overlay
+echo '1' > /proc/sys/net/bridge/bridge-nf-call-iptables
+sysctl -a | grep net.bridge.bridge-nf-call-iptables
+######################
+
+
+sleep 10 
+echo -e "\033[44m###Docker installation steps ###\033[m"
+echo -e "\033[42mRemoving the old runtime engine such as Docker and Buildah ###\033[m"
+echo -e "\033[42mInstalling the Docker engine\033[m"
+sudo dnf remove docker docker-client docker-client-latest docker-common docker-latest docker-latest-logrotate docker-logrotate docker-engine
+sudo dnf -y install dnf-plugins-core
+echo -e "\033[42mInstall the yum-utils package\033[m"
+dnf install -y yum-utils
+echo -e "\033[42mAdd repo\033[m"
+sudo dnf config-manager --add-repo https://download.docker.com/linux/centos/docker-ce.repo
+echo -e "\033[42mInstall Docker packages :docker-ce docker-ce-cli containerd.io docker-compose-plugin\033[m"
+sudo dnf install docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin -y
+sudo mkdir -p /etc/containerd
+containerd config default | sed 's/SystemdCgroup = false/SystemdCgroup = true/' | sudo tee /etc/containerd/config.toml
+cat /etc/containerd/config.toml | grep -i SystemdCgroup -B 50
+systemctl start docker
+systemctl enable docker
+######################
+
+sleep 10
+echo -e "\033[44m###Kubernetes installation steps ###\033[m"
+echo -e "\033[42mCreating a Kubernetes repo file\033[m"
+cat <<EOF | sudo tee /etc/yum.repos.d/kubernetes.repo
+[kubernetes]
+name=Kubernetes
+baseurl=https://pkgs.k8s.io/core:/stable:/v1.32/rpm/
+enabled=1
+gpgcheck=1
+gpgkey=https://pkgs.k8s.io/core:/stable:/v1.32/rpm/repodata/repomd.xml.key
+exclude=kubelet kubeadm kubectl cri-tools kubernetes-cni
+EOF
+
+echo -e "\033[42mInstalling the Kubernetes packages : kubelet kubeadm kubectl\033[m"
+dnf install -y kubelet kubeadm kubectl --disableexcludes=kubernetes
+echo -e "\033[42mEnable and start the Kubelet service\033[m"
+systemctl enable kubelet
+systemctl start kubelet
+#####################
+
+
+swapoff -a
+echo -e "\033[42mAdding in the kubernetes master\033[m"
+
+#### kubeadm join 192.168.1.31:6443 --token ********* command need to be add"
+
+++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++ 
++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
